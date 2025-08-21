@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ASHA – JJ Tribute • Web Player</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Winamp-ish spectrum bars */
+    canvas { background: radial-gradient(1200px 600px at 50% 120%, #0a0a0a 20%, #000 60%); }
+    .btn { @apply px-3 py-2 rounded-2xl shadow-sm border border-white/10 hover:bg-white/5 active:scale-[0.98] transition; }
+    .btn-toggle-active { @apply bg-white/10 border-white/20; }
+    .track-active { @apply bg-white/10 ring-1 ring-white/10; }
+    .scrollbar-thin::-webkit-scrollbar { height: 6px; width: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #2f2f2f; border-radius: 999px; }
+  </style>
+</head>
+<body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+  <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-4">
+    <header class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl sm:text-3xl font-bold">ASHA – <span class="text-zinc-300">JJ Tribute</span> • Web Player</h1>
+        <p class="text-sm text-zinc-400">Playlist-ready player with shuffle, repeat, keyboard shortcuts, and a Winamp-style spectrum visualizer.</p>
+      </div>
+      <div class="flex gap-2">
+        <button id="btnExport" class="btn">Export playlist</button>
+        <label class="btn cursor-pointer">
+          Import JSON<input id="importFile" type="file" accept="application/json" class="hidden" />
+        </label>
+      </div>
+    </header>
+
+    <!-- Visualizer -->
+    <section class="rounded-2xl overflow-hidden border border-white/10 shadow-lg">
+      <canvas id="viz" class="w-full" height="220"></canvas>
+    </section>
+
+    <!-- Transport + timeline -->
+    <section class="rounded-2xl border border-white/10 p-4 grid gap-4">
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="prev" class="btn" title="Prev (P)">⏮</button>
+        <button id="play" class="btn" title="Play/Pause (Space)">▶️</button>
+        <button id="next" class="btn" title="Next (N)">⏭</button>
+        <button id="btnShuffle" class="btn" title="Shuffle (S)">🔀</button>
+        <button id="btnRepeat" class="btn" title="Repeat: Off/One/All (R)">🔁</button>
+        <div class="flex items-center gap-2 ml-auto">
+          <span id="currTime" class="tabular-nums text-sm text-zinc-400">0:00</span>
+          <input id="seek" type="range" min="0" max="100" value="0" class="w-64 appearance-none bg-zinc-800 h-1 rounded" />
+          <span id="duration" class="tabular-nums text-sm text-zinc-400">0:00</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-zinc-400">Vol</span>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.9" class="w-32 appearance-none bg-zinc-800 h-1 rounded" />
+        </div>
+      </div>
+      <p class="text-xs text-zinc-500">Shortcuts: <b>Space</b> Play/Pause · <b>N</b> Next · <b>P</b> Prev · <b>S</b> Shuffle · <b>R</b> Repeat · <b>←/→</b> Seek · <b>±</b> Volume</p>
+    </section>
+
+    <!-- Playlist & dropzone -->
+    <section class="grid md:grid-cols-3 gap-4">
+      <div class="md:col-span-2 rounded-2xl border border-white/10 p-3">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-semibold">Playlist</h2>
+          <div class="text-xs text-zinc-500">Drag & drop MP3/OGG files anywhere to add</div>
+        </div>
+        <ul id="playlist" class="grid gap-1 max-h-[420px] overflow-auto pr-1 scrollbar-thin"></ul>
+      </div>
+      <aside class="rounded-2xl border border-white/10 p-4 space-y-3">
+        <h3 class="font-semibold">How to add the JJ Tribute versions</h3>
+        <ol class="list-decimal list-inside text-sm text-zinc-300 space-y-2">
+          <li>Replace the <code>src</code> URLs in the <code>tracks</code> array below with direct audio links you own or have permission to use (MP3/OGG). Many platforms (YouTube/SoundCloud/Spotify) block direct playback due to CORS/DRM.</li>
+          <li>You can also drag local audio files into this page—your browser will create temporary object URLs.</li>
+          <li>Your playlist is auto-saved to <em>localStorage</em> under this browser.</li>
+        </ol>
+        <details class="text-sm text-zinc-400"><summary class="cursor-pointer">Show initial track JSON</summary>
+          <pre class="text-xs bg-black/50 p-3 rounded-xl overflow-auto"><code id="initialJson"></code></pre>
+        </details>
+      </aside>
+    </section>
+  </div>
+
+  <audio id="audio" crossorigin="anonymous"></audio>
+
+  <script>
+    // --- Seed playlist (replace src URLs with your own direct MP3/OGG links) ---
+    const seedTracks = [
+      { title: "ASHA – JJ Tribute (Original Mix)", src: "" },
+      { title: "JJ Tribute – Primitive/Primal Mix", src: "" },
+      { title: "JJ Tribute – Space Mix / Space Version", src: "" },
+      { title: "JJ Tribute – Solar Mix", src: "" },
+      { title: "JJ Tribute – L+M Tough Mix", src: "" },
+      { title: "JJ Tribute – EuroClub Mix", src: "" },
+      { title: "JJ Tribute – EuroClub Edit", src: "" },
+      { title: "JJ Tribute – Radio Mix", src: "" },
+      { title: "JJ Tribute – JTC Mix", src: "" },
+      { title: "JJ Tribute – Music Without Control Mix", src: "" },
+      { title: "JJ Tribute – '?' Version", src: "" },
+      { title: "JJ Tribute – Primitive Version (2022)", src: "" },
+      // Modern / official reworks (use direct links you control)
+      { title: "ASHA & Shugz – JJ Tribute (2025 Remix)", src: "" },
+      { title: "Luke Neptune Rework (2014)", src: "" },
+      { title: "Luke Neptune Rework (2023)", src: "" },
+      // Notable fan reworks (only if you have direct MP3s/permission)
+      { title: "Bryan Kearney – JJ Tribute (Rework, 2012)", src: "" },
+      { title: "Nick Coulson – JJ Tribute (Remix, 2024)", src: "" },
+      { title: "Looney Trax – JJ Tribute (Mix, 2023)", src: "" },
+    ];
+
+    const LS_KEY = "asha_jj_playlist_v1";
+
+    // State
+    let tracks = [];
+    let current = 0;
+    let isPlaying = false;
+    let shuffle = false;
+    // repeat: 0 = off, 1 = one, 2 = all
+    let repeatMode = 0;
+    let shuffledOrder = [];
+
+    const audio = document.getElementById('audio');
+    const playBtn = document.getElementById('play');
+    const nextBtn = document.getElementById('next');
+    const prevBtn = document.getElementById('prev');
+    const shuffleBtn = document.getElementById('btnShuffle');
+    const repeatBtn = document.getElementById('btnRepeat');
+    const seek = document.getElementById('seek');
+    const volume = document.getElementById('volume');
+    const currTime = document.getElementById('currTime');
+    const duration = document.getElementById('duration');
+    const listEl = document.getElementById('playlist');
+    const exportBtn = document.getElementById('btnExport');
+    const importFile = document.getElementById('importFile');
+
+    // Load playlist from localStorage or seed
+    function loadPlaylist() {
+      const saved = localStorage.getItem(LS_KEY);
+      tracks = saved ? JSON.parse(saved) : seedTracks;
+      renderList();
+      document.getElementById('initialJson').textContent = JSON.stringify(seedTracks, null, 2);
+    }
+
+    function savePlaylist() { localStorage.setItem(LS_KEY, JSON.stringify(tracks)); }
+
+    function renderList() {
+      listEl.innerHTML = '';
+      tracks.forEach((t, i) => {
+        const li = document.createElement('li');
+        li.className = `flex items-center justify-between gap-2 p-2 rounded-xl hover:bg-white/5 ${i===current?'track-active':''}`;
+        li.innerHTML = `
+          <button class="text-left flex-1" title="Play this">${i===current? '▶️ ' : ''}${escapeHtml(t.title || 'Untitled')}\n${!t.src?'<span class=\'text-xs text-zinc-500\'>(no source URL yet)</span>':''}</button>
+          <div class="flex items-center gap-2 text-xs text-zinc-400">
+            <button class="px-2 py-1 rounded bg-white/5 hover:bg-white/10" data-action="up">↑</button>
+            <button class="px-2 py-1 rounded bg-white/5 hover:bg-white/10" data-action="down">↓</button>
+            <button class="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/40 text-red-200" data-action="del">✕</button>
+          </div>`;
+        li.addEventListener('click', (e) => {
+          const a = e.target.getAttribute('data-action');
+          if (a === 'up' || a === 'down' || a === 'del') {
+            e.stopPropagation();
+            if (a === 'up' && i>0) { [tracks[i-1], tracks[i]] = [tracks[i], tracks[i-1]]; if (current===i) current--; else if (current===i-1) current++; savePlaylist(); renderList(); }
+            if (a === 'down' && i<tracks.length-1) { [tracks[i+1], tracks[i]] = [tracks[i], tracks[i+1]]; if (current===i) current++; else if (current===i+1) current--; savePlaylist(); renderList(); }
+            if (a === 'del') { tracks.splice(i,1); if (current>=tracks.length) current = tracks.length-1; savePlaylist(); renderList(); }
+            return;
+          }
+          // play clicked
+          if (current !== i) { current = i; loadTrack(current, true); }
+          else { togglePlay(); }
+        });
+        listEl.appendChild(li);
+      });
+    }
+
+    function escapeHtml(str) { return (str||'').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[s])); }
+
+    function formatTime(sec) {
+      if (!isFinite(sec)) return '0:00';
+      const m = Math.floor(sec/60);
+      const s = Math.floor(sec%60).toString().padStart(2,'0');
+      return `${m}:${s}`;
+    }
+
+    function updateButtons() {
+      playBtn.textContent = isPlaying ? '⏸' : '▶️';
+      shuffleBtn.classList.toggle('btn-toggle-active', shuffle);
+      repeatBtn.classList.toggle('btn-toggle-active', repeatMode!==0);
+      repeatBtn.textContent = repeatMode===0 ? '🔁' : (repeatMode===1 ? '🔂' : '🔁∞');
+      // update list highlight
+      [...listEl.children].forEach((li, idx) => li.classList.toggle('track-active', idx===current));
+    }
+
+    function getOrderIndex(index) {
+      return shuffle ? shuffledOrder[index] : index;
+    }
+
+    function rebuildShuffle() {
+      shuffledOrder = Array.from({length: tracks.length}, (_, i) => i);
+      for (let i = shuffledOrder.length-1; i>0; i--) {
+        const j = Math.floor(Math.random() * (i+1));
+        [shuffledOrder[i], shuffledOrder[j]] = [shuffledOrder[j], shuffledOrder[i]];
+      }
+    }
+
+    function loadTrack(index, autoplay=false) {
+      const idx = getOrderIndex(index);
+      current = index; // keeps logical position for shuffle order
+      const t = tracks[idx];
+      audio.src = t?.src || '';
+      document.title = (t?.title || 'Untitled') + ' • JJ Tribute Player';
+      savePlaylist();
+      renderList();
+      if (autoplay) play();
+    }
+
+    function play() { audio.play().then(() => { isPlaying = true; updateButtons(); }).catch(console.warn); }
+    function pause() { audio.pause(); isPlaying = false; updateButtons(); }
+    function togglePlay() { isPlaying ? pause() : play(); }
+
+    function next() {
+      if (repeatMode === 1) { // repeat one
+        audio.currentTime = 0; play(); return;
+      }
+      const lastIndex = tracks.length - 1;
+      if (current >= lastIndex) {
+        if (repeatMode === 2) { current = 0; loadTrack(current, true); }
+        else pause();
+      } else {
+        loadTrack(current + 1, true);
+      }
+    }
+
+    function prev() {
+      if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+      if (current > 0) { loadTrack(current - 1, true); }
+    }
+
+    // --- Events ---
+    playBtn.onclick = togglePlay;
+    nextBtn.onclick = next;
+    prevBtn.onclick = prev;
+    shuffleBtn.onclick = () => { shuffle = !shuffle; if (shuffle) rebuildShuffle(); updateButtons(); };
+    repeatBtn.onclick = () => { repeatMode = (repeatMode + 1) % 3; updateButtons(); };
+
+    volume.oninput = (e) => { audio.volume = +e.target.value; };
+
+    seek.oninput = (e) => {
+      if (audio.duration) { audio.currentTime = (+e.target.value / 100) * audio.duration; }
+    };
+
+    audio.addEventListener('timeupdate', () => {
+      currTime.textContent = formatTime(audio.currentTime);
+      duration.textContent = formatTime(audio.duration || 0);
+      if (audio.duration) {
+        seek.value = (audio.currentTime / audio.duration) * 100;
+      }
+    });
+
+    audio.addEventListener('ended', () => {
+      if (repeatMode === 1) { audio.currentTime = 0; play(); return; }
+      if (current < tracks.length - 1) { next(); }
+      else if (repeatMode === 2) { current = 0; loadTrack(0, true); }
+      else { pause(); }
+    });
+
+    // Keyboard shortcuts
+    window.addEventListener('keydown', (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+      else if (e.key.toLowerCase() === 'n') next();
+      else if (e.key.toLowerCase() === 'p') prev();
+      else if (e.key.toLowerCase() === 's') { shuffle = !shuffle; if (shuffle) rebuildShuffle(); updateButtons(); }
+      else if (e.key.toLowerCase() === 'r') { repeatMode = (repeatMode + 1) % 3; updateButtons(); }
+      else if (e.key === 'ArrowRight') { audio.currentTime = Math.min(audio.currentTime + 5, audio.duration || audio.currentTime); }
+      else if (e.key === 'ArrowLeft') { audio.currentTime = Math.max(audio.currentTime - 5, 0); }
+      else if (e.key === '+' || e.key === '=') { audio.volume = Math.min(1, (audio.volume || 0.9) + 0.05); volume.value = audio.volume; }
+      else if (e.key === '-' || e.key === '_') { audio.volume = Math.max(0, (audio.volume || 0.9) - 0.05); volume.value = audio.volume; }
+    });
+
+    // Drag & drop local files
+    ['dragenter','dragover'].forEach(evt => window.addEventListener(evt, e => { e.preventDefault(); document.body.classList.add('outline-none'); }));
+    ['dragleave','drop'].forEach(evt => window.addEventListener(evt, e => { e.preventDefault(); }));
+    window.addEventListener('drop', (e) => {
+      const files = [...e.dataTransfer.files].filter(f => /\.(mp3|ogg|wav|m4a)$/i.test(f.name));
+      files.forEach(f => {
+        const url = URL.createObjectURL(f);
+        tracks.push({ title: f.name.replace(/\.[^.]+$/, ''), src: url });
+      });
+      savePlaylist(); renderList(); if (!isPlaying && tracks.length) { loadTrack(tracks.length-1, false); }
+    });
+
+    // Import/Export
+    exportBtn.onclick = () => {
+      const blob = new Blob([JSON.stringify(tracks, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'asha_jj_playlist.json'; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    };
+    importFile.onchange = (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try { const data = JSON.parse(reader.result); if (Array.isArray(data)) { tracks = data; current = 0; savePlaylist(); renderList(); loadTrack(0, false); } }
+        catch(err){ alert('Invalid JSON'); }
+      };
+      reader.readAsText(file);
+    };
+
+    // --- Visualizer (FFT spectrum) ---
+    const canvas = document.getElementById('viz');
+    const ctx = canvas.getContext('2d', { alpha: false });
+
+    // Resize canvas with DPR awareness
+    function fitCanvas() {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const w = canvas.clientWidth; const h = canvas.clientHeight;
+      canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    const ro = new ResizeObserver(fitCanvas); ro.observe(canvas);
+    fitCanvas();
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioCtx();
+    const srcNode = audioCtx.createMediaElementSource(audio);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256; // 128/256/512
+    analyser.smoothingTimeConstant = 0.82;
+    srcNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    function draw() {
+      requestAnimationFrame(draw);
+      analyser.getByteFrequencyData(dataArray);
+
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      ctx.clearRect(0, 0, w, h);
+
+      const barCount = Math.min(96, bufferLength);
+      const gap = 2; // px
+      const barWidth = (w - (barCount - 1) * gap) / barCount;
+
+      for (let i = 0; i < barCount; i++) {
+        const v = dataArray[i] / 255; // 0..1
+        const barHeight = Math.max(2, v * (h - 10));
+        const x = i * (barWidth + gap);
+        const y = h - barHeight;
+        // gradient per bar (subtle greenish tint like classic visualizers)
+        const grad = ctx.createLinearGradient(0, y, 0, h);
+        grad.addColorStop(0, '#9ef9');
+        grad.addColorStop(1, '#2dd4bf20');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, barWidth, barHeight);
+      }
+    }
+    draw();
+
+    // Some browsers require a user gesture to start/resume AudioContext
+    document.addEventListener('click', () => { if (audioCtx.state !== 'running') audioCtx.resume(); }, { once: true });
+
+    // Boot
+    loadPlaylist();
+    rebuildShuffle();
+    loadTrack(0, false);
+    updateButtons();
+  </script>
+</body>
+</html>
